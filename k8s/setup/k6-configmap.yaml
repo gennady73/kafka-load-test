@@ -1,0 +1,193 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: kafka-perf-script
+  namespace: performance-testing
+data:
+  kafka-perf-framework.js: |
+    import { check, sleep } from "k6";
+    import { uuidv4 } from "https://jslib.k6.io/k6-utils/1.6.0/index.js";
+    import { 
+        Producer, 
+        Consumer, 
+        AdminClient, 
+        SchemaRegistry,
+        SCHEMA_TYPE_STRING,
+        SCHEMA_TYPE_JSON,
+        SCHEMA_TYPE_AVRO,
+        SCHEMA_TYPE_PROTOBUF
+    } from "k6/x/kafka";
+
+    // =============================================================================
+    // FRAMEWORK CONFIGURATION (Driven by CLI Environment Variables)
+    // =============================================================================
+    const BROKERS = (__ENV.KAFKA_BROKERS || "localhost:9092").split(",");
+    const TOPIC = __ENV.KAFKA_TOPIC || "performance_evaluation_pipeline";
+    const REGISTRY_URL = __ENV.SCHEMA_REGISTRY_URL || "http://localhost:8081";
+
+    const SERIALIZATION = __ENV.SERIALIZATION_TYPE || "JSON"; 
+    const ROLE = __ENV.TEST_ROLE || "PRODUCER"; 
+    const COMPRESSION = __ENV.COMPRESSION_TYPE || "SNAPPY"; 
+
+    const TARGET_RPS = parseInt(__ENV.TARGET_RPS || "5000", 10);
+    const DURATION = __ENV.TEST_DURATION || "5m";
+    const MAX_VUS = parseInt(__ENV.MAX_VUS || "100", 10);
+
+    // =============================================================================
+    // K6 SCENARIO RUNTIME DESIGN
+    // =============================================================================
+    export const options = {
+        scenarios: {
+            throughput_test: {
+                executor: "constant-arrival-rate",
+                rate: TARGET_RPS,
+                timeUnit: "1s",
+                duration: DURATION,
+                preAllocatedVUs: Math.min(50, MAX_VUS),
+                maxVUs: MAX_VUS,
+            },
+        },
+        thresholds: {
+            kafka_writer_error_count: ["count == 0"],
+            kafka_reader_error_count: ["count == 0"],
+        }
+    };
+
+    // =============================================================================
+    // INITIALIZATION AND REGISTRY RESOLUTION
+    // =============================================================================
+    const adminClient = new AdminClient({ brokers: BROKERS });
+    const schemaRegistry = new SchemaRegistry({ url: REGISTRY_URL });
+
+    let producer = null;
+    let consumer = null;
+
+    if (ROLE === "PRODUCER") {
+        producer = new Producer({
+            brokers: BROKERS,
+            topic: TOPIC,
+            compression: COMPRESSION === "NONE" ? null : COMPRESSION.toLowerCase(),
+            batchSize: 16384, 
+            batchBytes: 1048576 * 2, 
+        });
+    } else {
+        consumer = new Consumer({
+            brokers: BROKERS,
+            topic: TOPIC,
+            groupId: `xk6_perf_group_${SERIALIZATION.toLowerCase()}_${uuidv4().substring(0, 8)}`, 
+        });
+    }
+
+    let valueSchemaObject = null;
+    if (SERIALIZATION === "AVRO" || SERIALIZATION === "PROTOBUF") {
+        try {
+            valueSchemaObject = schemaRegistry.getSchema({ 
+                subject: `${TOPIC}-value` 
+            });
+        } catch (e) {
+            if (SERIALIZATION === "AVRO") {
+                const avroSchema = `{"type":"record","name":"Event","namespace":"perf","fields":[{"name":"id","type":"string"},{"name":"timestamp","type":"long"},{"name":"payload","type":"string"}]}`;
+                valueSchemaObject = schemaRegistry.createSchema({
+                    subject: `${TOPIC}-value`,
+                    schema: avroSchema,
+                    schemaType: SCHEMA_TYPE_AVRO
+                });
+            } else if (SERIALIZATION === "PROTOBUF") {
+                const protoSchema = `
+                syntax = "proto3";
+                package perf;
+                message Event {
+                  string id = 1;
+                  int64 timestamp = 2;
+                  string payload = 3;
+                }`;
+                valueSchemaObject = schemaRegistry.createSchema({
+                    subject: `${TOPIC}-value`,
+                    schema: protoSchema,
+                    schemaType: SCHEMA_TYPE_PROTOBUF
+                });
+            }
+        }
+    }
+
+    // =============================================================================
+    // SETUP LIFECYCLE
+    // =============================================================================
+    export function setup() {
+        console.log(` Ensuring topic '${TOPIC}' exists...`);
+        const currentTopics = adminClient.listTopics();
+        const topicExists = currentTopics.some(t => t.topic === TOPIC || t.name === TOPIC);
+
+        if (!topicExists) {
+            console.log(` Topic '${TOPIC}' not found. Creating it now...`);
+            try {
+                adminClient.createTopic({ 
+                    topic: TOPIC, 
+                    numPartitions: 12, 
+                    replicationFactor: 1 
+                });
+                sleep(2); 
+                console.log(` Topic '${TOPIC}' created successfully.`);
+            } catch (error) {
+                if (!error.message.includes("already exists")) throw error;
+                console.log(` Topic '${TOPIC}' was created concurrently.`);
+            }
+        } else {
+            console.log(` Topic '${TOPIC}' already exists. Skipping creation.`);
+        }
+    }
+
+    // =============================================================================
+    // CORE LOAD ITERATION
+    // =============================================================================
+    export default function () {
+        const correlationId = uuidv4();
+        const timestamp = new Date().getTime();
+
+        if (ROLE === "PRODUCER") {
+            let serializedKey;
+            let serializedValue;
+
+            const messageKey = { correlationId: correlationId };
+            const messageValue = { 
+                id: correlationId, 
+                timestamp: timestamp, 
+                payload: "High-throughput performance verification event." 
+            };
+
+            if (SERIALIZATION === "JSON") {
+                serializedKey = schemaRegistry.serialize({ data: messageKey, schemaType: SCHEMA_TYPE_JSON });
+                serializedValue = schemaRegistry.serialize({ data: messageValue, schemaType: SCHEMA_TYPE_JSON });
+            } else if (SERIALIZATION === "AVRO") {
+                serializedKey = schemaRegistry.serialize({ data: correlationId, schemaType: SCHEMA_TYPE_STRING });
+                serializedValue = schemaRegistry.serialize({ data: messageValue, schema: valueSchemaObject, schemaType: SCHEMA_TYPE_AVRO });
+            } else if (SERIALIZATION === "PROTOBUF") {
+                serializedKey = schemaRegistry.serialize({ data: correlationId, schemaType: SCHEMA_TYPE_STRING });
+                serializedValue = schemaRegistry.serialize({ data: messageValue, schema: valueSchemaObject, schemaType: SCHEMA_TYPE_PROTOBUF });
+            } else {
+                serializedKey = schemaRegistry.serialize({ data: correlationId, schemaType: SCHEMA_TYPE_STRING });
+                serializedValue = schemaRegistry.serialize({ data: "Raw String Performance Verification", schemaType: SCHEMA_TYPE_STRING });
+            }
+
+            producer.produce({
+                messages: [{ key: serializedKey, value: serializedValue }]
+            });
+
+        } else {
+            const consumed = consumer.consume({ maxMessages: 100 });
+            check(consumed, {
+                "Consumer fetched messages successfully": (msg) => msg.length > 0
+            });
+        }
+    }
+
+    // =============================================================================
+    // TEARDOWN LIFECYCLE
+    // =============================================================================
+    export function teardown() {
+        console.log(" Closing connection handles...");
+        if (producer) producer.close();
+        if (consumer) consumer.close();
+        adminClient.close();
+    }
+    

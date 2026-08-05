@@ -1,0 +1,19 @@
+# Start with a lightweight Python image
+FROM python:3.11-slim
+
+# Install wget to grab the pre-compiled binary
+RUN apt-get update && apt-get install -y wget && rm -rf /var/lib/apt/lists/*
+
+# Download the standalone k6-web-dashboard binary (Linux amd64)
+# (Check the grafana/xk6-dashboard releases page for the latest version number)
+RUN wget -qO- https://github.com/grafana/xk6-dashboard/releases/download/v0.7.5/k6-web-dashboard_0.7.5_linux_amd64.tar.gz | tar -xz -C /usr/local/bin k6-web-dashboard
+
+# Make sure it is executable
+RUN chmod +x /usr/local/bin/k6-web-dashboard
+
+# Create the data directory
+RUN mkdir -p /data
+WORKDIR /data
+
+# We will still mount the Python script via ConfigMap so you can tweak it easily!
+CMD ["python3", "/script/server.py"]

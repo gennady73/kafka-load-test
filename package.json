@@ -1,0 +1,16 @@
+{
+  "name": "kafka-load-test",
+  "version": "1.0.0",
+  "description": "load test for Kafka",
+  "main": "index.js",
+  "scripts": {
+  "build-k6": "GOTOOLCHAIN=auto GOPATH=$HOME/go xk6 build --with github.com/mostafa/xk6-kafka --with github.com/grafana/xk6-output-prometheus-remote",
+  "test:local": "./k6 run tests/kafka-test.js",
+  "test-tefault": "echo \"Error: no test specified\" && exit 1"
+  },
+  "author": "",
+  "license": "ISC",
+  "devDependencies": {
+    "@types/k6": "^2.0.0"
+  }
+}

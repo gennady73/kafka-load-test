@@ -1,0 +1,51 @@
+# Using the Red Hat Universal Base Image (UBI) for OpenShift deployments. 
+# It guarantees compatibility with OpenShift's default Security Context Constraints (SCCs), 
+# and ensures to remain in a fully supported enterprise ecosystem.
+#
+# Because the Red Hat go-toolset container defaults to a non-root user (UID 1001), 
+# the temporarily switch to root is required to install the C-compiler and librdkafka headers, 
+# build the binary, and then drop it into a secure ubi-minimal runtime image.
+
+# ==========================================
+# STAGE 1: Builder (Red Hat UBI 9 Go Toolset)
+# ==========================================
+FROM registry.redhat.io/ubi9/go-toolset:1.26 AS builder
+
+# Switch to root to install native C dependencies
+USER root
+
+# librdkafka is typically found in the EPEL repository for RHEL/UBI 9
+RUN dnf install -y https://dl.fedoraproject.org/pub/epel/epel-release-latest-9.noarch.rpm && \
+    dnf install -y gcc librdkafka-devel git && \
+    dnf clean all
+
+# Switch back to the safe default user for the Go build process
+USER 1001
+WORKDIR /opt/app-root/src
+
+# Install xk6 and build the custom binary
+RUN go install go.k6.io/xk6/cmd/xk6@latest && \
+    CGO_ENABLED=1 /opt/app-root/src/go/bin/xk6 build \
+    --with github.com/mostafa/xk6-kafka/v2@v2.1.0 \
+    --with github.com/grafana/xk6-dashboard@latest
+
+# ==========================================
+# STAGE 2: OpenShift-Compatible Runtime
+# ==========================================
+FROM registry.access.redhat.com/ubi9/ubi-minimal:latest
+
+# Install the runtime C-library (requires EPEL as well)
+RUN rpm -ivh https://dl.fedoraproject.org/pub/epel/epel-release-latest-9.noarch.rpm && \
+    microdnf install -y librdkafka ca-certificates && \
+    microdnf clean all
+
+# Create a non-root user that complies with OpenShift's restricted SCC
+RUN useradd -u 1001 -m -s /bin/bash k6user
+USER 1001
+WORKDIR /home/k6user
+
+# Copy the compiled binary from the builder
+COPY --from=builder /opt/app-root/src/k6 /usr/local/bin/k6
+COPY ./tests/kafka-perf-framework.js /home/k6user/kafka-perf-framework.js
+
+ENTRYPOINT ["k6"]

@@ -1,0 +1,36 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: k6-aggregator
+  namespace: performance-testing
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: k6-aggregator
+  template:
+    metadata:
+      labels:
+        app: k6-aggregator
+    spec:
+      containers:
+      - name: aggregator
+        image: docker.io/gennady73/k6-aggregator-deb:latest
+        ports:
+        - containerPort: 8080
+        volumeMounts:
+        - name: script-volume
+          mountPath: /script
+          
+        # Mount a writable scratch space for OpenShift
+        - name: data-volume
+          mountPath: /data
+          
+      volumes:
+      - name: script-volume
+        configMap:
+          name: k6-aggregator-script
+          
+      # Define the emptyDir volume
+      - name: data-volume
+        emptyDir: {}

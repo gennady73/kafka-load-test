@@ -1,0 +1,78 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: k6-scaled-test-consumer-metrics-web
+  namespace: performance-testing
+spec:
+  # THE SCALING DIAL: Change this from 1 to 3 to instantly scale out
+  parallelism: 3
+  completions: 3 # Must match parallelism so the Job knows when it is fully "Done"
+  backoffLimit: 0 
+  template:
+    metadata:
+      labels:
+        app: k6-scaled-test-producer-consumer
+    spec:
+      restartPolicy: Never
+      containers:
+      - name: k6-runner
+        image: docker.io/gennady73/k6v2ubi9
+
+        workingDir: /tmp
+
+        command: 
+          - "/bin/sh"
+          - "-c"
+          - >
+            k6 run --out json=/tmp/raw-metrics.json /script/kafka-perf-framework.js && 
+            sleep 5 && 
+            curl -X POST --data-binary @/tmp/raw-metrics.json "http://k6-aggregator.performance-testing.svc:8080/upload/${POD_NAME}.json?role=consumer&total=${EXPECTED_PODS}"
+
+        env:
+          - name: KAFKA_BROKERS
+            value: "observ-kafka-kafka-bootstrap.observ-kafka.svc:9092"
+          - name: SCHEMA_REGISTRY_URL
+            value: "http://registry-svc.performance-testing.svc:8080/apis/ccompat/v6"
+          - name: KAFKA_TOPIC
+            value: "performance_evaluation_pipeline_pb"
+          
+          # The pod passes its expected parallelism to the aggregator and runs for given duration  
+          - name: EXPECTED_PODS
+            value: "3" 
+          - name: TEST_DURATION
+            value: "30s"
+
+          - name: POD_NAME
+            valueFrom:
+              fieldRef:
+                fieldPath: metadata.name
+
+          # THE ROLE DIAL: Set to "PRODUCER" or "CONSUMER"
+          - name: TEST_ROLE
+            value: "CONSUMER" 
+          
+          - name: SERIALIZATION_TYPE
+            value: "PROTOBUF"
+          
+          # THE LOAD DIAL: Remember this is PER POD
+          - name: TARGET_RPS
+            value: "2500" 
+          - name: MAX_VUS
+            value: "5"       
+          - name: GOMAXPROCS
+            value: "2"
+
+        resources:
+          requests:
+            cpu: "2000m"
+            memory: "2048Mi"
+          limits:
+            cpu: "3000m"      
+            memory: "2048Mi"  # Given your metrics, give it some breathing room
+        volumeMounts:
+        - name: script-volume
+          mountPath: /script
+      volumes:
+      - name: script-volume
+        configMap:
+          name: kafka-perf-script

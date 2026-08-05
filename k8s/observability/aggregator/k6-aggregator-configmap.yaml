@@ -1,0 +1,227 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: k6-aggregator-script
+  namespace: performance-testing
+data:
+  server.py: |
+    import os, sys, subprocess, urllib.parse, logging, json
+    from http.server import BaseHTTPRequestHandler, HTTPServer
+
+    logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(message)s', datefmt='%Y-%m-%d %H:%M:%S')
+
+    DATA_DIR = "/data"
+    os.makedirs(DATA_DIR, exist_ok=True)
+
+    # Global variable to natively track and kill the replay server
+    replay_process = None
+
+    class Handler(BaseHTTPRequestHandler):
+        def log_message(self, format, *args):
+            logging.info(f"{self.address_string()} - {format%args}")
+
+        def do_POST(self):
+            try:
+                url = urllib.parse.urlparse(self.path)
+                query = urllib.parse.parse_qs(url.query)
+                
+                role = query.get('role', ['worker'])[0]
+                total = int(query.get('total', ['0'])[0])
+                
+                filename = os.path.basename(url.path)
+                filepath = os.path.join(DATA_DIR, filename)
+                
+                length = int(self.headers.get('Content-Length', 0))
+                data = self.rfile.read(length)
+
+                if length == 0 or len(data) == 0:
+                    self.send_response(400)
+                    self.end_headers()
+                    return
+
+                with open(filepath, 'wb') as f:
+                    f.write(data)
+                    
+                self.send_response(200)
+                self.end_headers()
+                
+                logging.info(f"Received file: {filename} | Role: {role} | Expected total for this role: {total}")
+                logging.info("Waiting for user to trigger aggregation via /start-replay...")
+                    
+            except Exception as e:
+                logging.error(f"Server error: {e}")
+                self.send_response(500)
+                self.end_headers()
+
+        def do_GET(self):
+            global replay_process
+
+            if self.path == '/':
+                report = os.path.join(DATA_DIR, 'report.html')
+                if os.path.exists(report):
+                    self.send_response(200)
+                    self.send_header('Content-type', 'text/html')
+                    self.end_headers()
+                    with open(report, 'rb') as f:
+                        self.wfile.write(f.read())
+                else:
+                    self.send_response(404)
+                    self.send_header('Content-type', 'text/html')
+                    self.end_headers()
+                    self.wfile.write(b"<html><body><h1>Report Not Ready</h1><p>Run a test, then generate it via <a href='/start-replay'>/start-replay</a></p></body></html>")
+            
+            # ROUTE 2: ANIMATED RESET
+            elif self.path == '/reset':
+                self.send_response(200)
+                self.send_header('Content-type', 'text/html')
+                self.end_headers()
+                
+                html_start = r"""<html>
+                <head>
+                <style>
+                    body { font-family: monospace; background-color: #121212; color: #00ff00; padding: 30px; font-size: 16px; }
+                    .spinner::after { content: '[ - ]'; animation: spin 0.5s linear infinite; }
+                    @keyframes spin { 0% { content: '[ - ]'; } 25% { content: '[ \ ]'; } 50% { content: '[ | ]'; } 75% { content: '[ / ]'; } }
+                </style>
+                </head>
+                <body>
+                <h2 style='color: #ffffff;'>Environment Reset</h2>
+                <div id='loading' style='color: #aaaaaa;'><span class='spinner'></span> Wiping data directory...</div>
+                <div id='output'></div>
+                <script>
+                    function done() {
+                        document.getElementById('loading').style.display = 'none';
+                        document.getElementById('output').innerHTML = "<br><h3 style='color: #00ff00;'>&#10095; Reset Successful!</h3><p style='color: white;'>All previous load test data, reports, and logs have been cleared.</p>";
+                    }
+                </script>
+                """
+                self.wfile.write(html_start.encode('utf-8'))
+                self.wfile.flush()
+
+                os.chdir(DATA_DIR)
+                subprocess.run("rm -f *.json *.ndjson *.html *.log", shell=True)
+                
+                if replay_process is not None and replay_process.poll() is None:
+                    replay_process.terminate()
+                    replay_process.wait()
+                    
+                logging.info("Data directory wiped clean via /reset route.")
+                self.wfile.write(b"<script>done();</script></body></html>")
+
+            # ROUTE 3: ANIMATED STREAMING REPLAY
+            elif self.path == '/start-replay':
+                self.send_response(200)
+                self.send_header('Content-type', 'text/html')
+                self.end_headers()
+                
+                html_start = r"""<html>
+                <head>
+                <style>
+                    body { font-family: monospace; background-color: #121212; color: #00ff00; padding: 30px; font-size: 16px; }
+                    .spinner::after { content: '[ - ]'; animation: spin 0.5s linear infinite; }
+                    @keyframes spin { 0% { content: '[ - ]'; } 25% { content: '[ \ ]'; } 50% { content: '[ | ]'; } 75% { content: '[ / ]'; } }
+                    .log-line { margin-bottom: 12px; }
+                </style>
+                </head>
+                <body>
+                <h2 style='color: #ffffff;'>Processing Load Test Data</h2>
+                <div id='output'></div>
+                <div id='loading' style='color: #aaaaaa; margin-top: 20px;'><span class='spinner'></span> Working...</div>
+                <script>
+                    const out = document.getElementById('output');
+                    function emit(msg) {
+                        out.innerHTML += "<div class='log-line'>&#10095; " + msg + "</div>";
+                        window.scrollTo(0, document.body.scrollHeight);
+                    }
+                    function finish() {
+                        document.getElementById('loading').style.display = 'none';
+                    }
+                </script>
+                """
+                self.wfile.write(html_start.encode('utf-8'))
+                self.wfile.flush()
+
+                def emit(msg):
+                    safe_msg = msg.replace("'", "\\'")
+                    self.wfile.write(f"<script>emit('{safe_msg}');</script>\n".encode('utf-8'))
+                    self.wfile.flush()
+
+                os.chdir(DATA_DIR)
+                files = [f for f in os.listdir(DATA_DIR) if f.endswith('.json') and f not in ['merged.json', 'combined_raw.json', 'run.json', 'metrics.json', 'points.json']]
+                
+                if not files:
+                    emit("<span style='color: #ff5555;'>Error: No raw JSON files found. Please run a load test first.</span>")
+                    self.wfile.write(b"<script>finish();</script></body></html>")
+                    return
+                
+                try:
+                    pod_files_mtime = max([os.path.getmtime(f) for f in files])
+                    report_exists = os.path.exists("report.html")
+                    report_mtime = os.path.getmtime("report.html") if report_exists else 0
+                    
+                    if report_exists and report_mtime > pod_files_mtime:
+                        emit("<span style='color: #aaffaa;'>Aggregation already completed for current test data. Skipping steps 1-5 to prevent unnecessary processing duplication...</span>")
+                    else:
+                        input_files = " ".join(files)
+                        
+                        emit("1. Rebuilding strict k6 JSON structure...")
+                        subprocess.run(f"grep '\"type\":\"Run\"' {input_files} | head -n 1 > run.json || true", shell=True)
+                        subprocess.run(f"grep '\"type\":\"Metric\"' {input_files} | sort -u > metrics.json || true", shell=True)
+                        sort_cmd = f"grep '\"type\":\"Point\"' {input_files} | sed 's/.*\"time\":\"\\([^\"]*\\)\".*/\\1|&/' | sort | cut -d'|' -f2- > points.json || true"
+                        subprocess.run(sort_cmd, shell=True)
+                        subprocess.run("cat run.json metrics.json points.json > combined_raw.json", shell=True)
+                        
+                        emit("2. Executing: k6-web-dashboard aggregate ...")
+                        subprocess.run(["k6-web-dashboard", "aggregate", "combined_raw.json", "merged_events.ndjson"], check=True)
+                        
+                        emit("3. Patching Grafana bug via strict JSON manipulation...")
+                        patched_lines = []
+                        with open("merged_events.ndjson", "r") as f:
+                            for line in f:
+                                if not line.strip(): continue
+                                try:
+                                    obj = json.loads(line)
+                                    if obj.get("event") == "param":
+                                        if "aggregates" not in obj.get("data", {}):
+                                            obj["data"]["aggregates"] = {
+                                                "counter": ["count", "rate"],
+                                                "gauge": ["value"],
+                                                "rate": ["rate"],
+                                                "trend": ["min", "med", "avg", "p(90)", "p(95)", "max"]
+                                            }
+                                        line = json.dumps(obj, separators=(',', ':')) + '\n'
+                                except Exception as e:
+                                    pass
+                                patched_lines.append(line)
+                        with open("merged_events.ndjson", "w") as f:
+                            f.writelines(patched_lines)
+                        
+                        emit("4. Executing: k6-web-dashboard report ...")
+                        subprocess.run(["k6-web-dashboard", "report", "merged_events.ndjson", "report.html"], check=True)
+                        
+                        emit("5. HTML Report successfully generated at /data/report.html!")
+                        subprocess.run("rm run.json metrics.json points.json", shell=True)
+                    
+                    emit("6. Triggering On-Demand Replay Server on port 5665...")
+                    
+                    # Natively terminate the previous Go process if it exists
+                    if replay_process is not None and replay_process.poll() is None:
+                        replay_process.terminate()
+                        replay_process.wait()
+                        
+                    replay_log = open("replay.log", "w")
+                    replay_process = subprocess.Popen(
+                        ["k6-web-dashboard", "replay", "merged_events.ndjson", "--host", "0.0.0.0", "--port", "5665"],
+                        stdout=replay_log,
+                        stderr=subprocess.STDOUT
+                    )
+                    
+                    emit("7. <b style='color: white;'>SUCCESS!</b> Open a new tab and navigate to: <a href='http://localhost:5665' target='_blank' style='color: #00ffff;'>http://localhost:5665</a>")
+                    
+                except Exception as e:
+                    emit(f"<span style='color: #ff5555;'>FATAL ERROR: {e}</span>")
+                
+                self.wfile.write(b"<script>finish();</script></body></html>")
+
+    logging.info("Starting K6 Aggregator Server on port 8080...")
+    HTTPServer(('0.0.0.0', 8080), Handler).serve_forever()

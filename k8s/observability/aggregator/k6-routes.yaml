@@ -1,0 +1,27 @@
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: k6-control-panel
+  namespace: performance-testing
+  labels:
+    app: k6-aggregator
+spec:
+  to:
+    kind: Service
+    name: k6-aggregator
+  port:
+    targetPort: http-report
+---
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: k6-replay-server
+  namespace: performance-testing
+  labels:
+    app: k6-aggregator
+spec:
+  to:
+    kind: Service
+    name: k6-aggregator
+  port:
+    targetPort: http-replay

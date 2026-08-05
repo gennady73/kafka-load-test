@@ -1,0 +1,84 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: k6-hourly-soak-test
+  namespace: performance-testing
+spec:
+  # THE SCHEDULE: "0 * * * *" means run at minute 0 of every hour.
+  schedule: "0 * * * *"
+  
+  # THE SAFETY VALVE: If Hour 1 takes 61 minutes, do not start Hour 2 yet. 
+  # This prevents accidentally doubling load to 6 pods!
+  concurrencyPolicy: Forbid 
+  
+  # Keep 3 successful pod histories for debugging, delete older ones
+  successfulJobsHistoryLimit: 3 
+  failedJobsHistoryLimit: 1
+  
+  jobTemplate:
+    spec:
+      parallelism: 3
+      completions: 3
+      backoffLimit: 0
+      template:
+        metadata:
+          labels:
+            app: k6-load-test-producer-consumer
+        spec:
+          restartPolicy: Never
+          containers:
+          - name: k6-runner
+            image: docker.io/gennady73/k6v2ubi9-dashboard
+            
+            
+            env:
+            # The pod passes its expected parallelism to the aggregator and runs for given duration
+            - name: EXPECTED_PODS
+              value: "3" 
+            - name: TEST_DURATION
+              value: "5m"
+
+            - name: KAFKA_BROKERS
+              value: "observ-kafka-kafka-bootstrap.observ-kafka.svc:9092"
+            - name: SCHEMA_REGISTRY_URL
+              value: "http://registry-svc.performance-testing.svc:8080/apis/ccompat/v6"
+            - name: KAFKA_TOPIC
+              value: "performance_evaluation_pipeline_pb"
+            
+            # THE ROLE DIAL: Set to "PRODUCER" or "CONSUMER"
+            - name: TEST_ROLE
+              value: "PRODUCER" 
+            
+            - name: SERIALIZATION_TYPE
+              value: "PROTOBUF"
+            
+            # THE LOAD DIAL: Remember this is PER POD
+            - name: TARGET_RPS
+              value: "2500" 
+            - name: MAX_VUS
+              value: "100"       
+            - name: GOMAXPROCS
+              value: "2" 
+
+            command: 
+              - "/bin/sh"
+              - "-c"
+              - >
+                k6 run --out 'web-dashboard=export=/tmp/report.json' /script/kafka-perf-framework.js && 
+                sleep 5 &&
+                curl -X POST -F "file=@/tmp/report.json" "http://k6-aggregator.performance-testing.svc:8080/upload?total=${EXPECTED_PODS}"
+                
+            resources:
+              requests:
+                cpu: "2000m"
+                memory: "2048Mi"
+              limits:
+                cpu: "2000m"      
+                memory: "6656Mi"
+            volumeMounts:
+            - name: script-volume
+              mountPath: /script
+          volumes:
+          - name: script-volume
+            configMap:
+              name: kafka-perf-script

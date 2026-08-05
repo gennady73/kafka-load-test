@@ -1,0 +1,35 @@
+apiVersion: opentelemetry.io/v1beta1
+kind: OpenTelemetryCollector
+metadata:
+  name: k6-metrics-bridge
+  namespace: performance-testing
+spec:
+  mode: deployment
+  config:
+    receivers:
+      otlp:
+        protocols:
+          grpc:
+            endpoint: 0.0.0.0:4317
+    
+    exporters:
+      otlp/openobserve:
+        endpoint: o2-openobserve-router.openobserve.svc:5081
+        headers:
+          Authorization: "Basic cm9vdEBleGFtcGxlLmNvbTpIZjR2UVNJd0k5OUdRUjVR"
+          organization: default
+          stream-name: default
+        tls:
+          insecure: true
+          
+      debug:
+        verbosity: detailed
+
+    service:
+      telemetry:
+        logs:
+          level: info
+      pipelines:
+        metrics:
+          receivers: [otlp]
+          exporters: [otlp/openobserve, debug]
