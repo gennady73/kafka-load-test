@@ -16,7 +16,7 @@ This framework utilizes a custom `k6` build (incorporating `xk6-kafka` and `xk6-
 
 ---
 
-## 🏗️ Phase 1: Online Preparation (Pre-Air-Gap)
+## Phase 1: Online Preparation (Pre-Air-Gap)
 
 Before deploying inside the isolated network, you need the required container images available in your internal registry. You can either **transfer pre-built container images** or **build them from source**.
 
@@ -28,6 +28,7 @@ If pre-built images are already available in an external registry or provided as
    ```bash
    docker pull <external-registry>/perf/k6-ubi:latest
    docker pull <external-registry>/perf/k6-web-dashboard:latest
+   docker pull <external-registry>/perf/k6-aggregator:latest
    ```
 
 2. Transfer to Air-Gapped Registry:
@@ -45,7 +46,7 @@ Export them to tar archives (if transferring via physical media) or re-tag and p
 ### Option B: Build from Source (Custom Compilation)
 If you need to build the custom binaries and container images from scratch on an internet-connected workstation:
 
-1. Build the Custom k6 Binary:
+1. Build the Custom `k6` Binary:
 
     ```bash
     go install go.k6.io/xk6/cmd/xk6@latest
@@ -62,6 +63,9 @@ If you need to build the custom binaries and container images from scratch on an
 
     # Build the Web Dashboard enabled image
     docker build -t [your-corporate-registry.com/perf/k6-web-dashboard:latest](https://your-corporate-registry.com/perf/k6-web-dashboard:latest) -f docker/Dockerfile-ubi-k6-web-dashboard .
+
+    # Build the Aggregator image
+    docker build -t [your-corporate-registry.com/perf/k6-aggregator:latest](https://your-corporate-registry.com/perf/k6-aggregator:latest) -f docker/Dockerfile-ubi-k6-aggregator .
     ```
 
 3. Push to Internal Registry:
@@ -69,16 +73,18 @@ If you need to build the custom binaries and container images from scratch on an
     ```bash
     docker push [your-corporate-registry.com/perf/k6-ubi:latest](https://your-corporate-registry.com/perf/k6-ubi:latest)
     docker push [your-corporate-registry.com/perf/k6-web-dashboard:latest](https://your-corporate-registry.com/perf/k6-web-dashboard:latest)
+    docker push [your-corporate-registry.com/perf/k6-aggregator:latest](https://your-corporate-registry.com/perf/k6-aggregator:latest)
     ```
 
 ## Phase 2: Air-Gapped Execution
-Once inside the isolated environment, ensure all Kubernetes manifests (k8s/workers/*.yaml) have their image: properties updated to point to your internal registry.
+Once inside the isolated environment, ensure all Kubernetes manifests (`k8s/workers/*.yaml`) have their `image`: properties updated to point to your internal registry.
 
 1. Environment Setup
 Create the namespace and deploy the Aggregator pipeline:
     ```bash
     # Create namespace and apply configurations
     oc apply -f k8s/setup/k6-namespace.yaml
+    oc apply -f k8s/setup/k6-configmap.yaml
     oc apply -f k8s/observability/aggregator/k6-aggregator-configmap.yaml
 
     # Deploy the Aggregator and Expose Routes
@@ -92,8 +98,7 @@ Retrieve your generated routes:
     ```bash
     oc get routes -n performance-testing -l app=k6-aggregator
     ```
-
-Open the k6-control-panel URL in your browser. You will use this interface to track test data, clear the environment, and trigger reports.
+    Open the `k6-control-panel` URL in your browser. You will use this interface to track test data, clear the environment, and trigger reports.
 
 3. Execute the Load Test
 Trigger your worker pods. You can run Producers and Consumers simultaneously or sequentially:
@@ -103,88 +108,55 @@ Trigger your worker pods. You can run Producers and Consumers simultaneously or 
     ```
 
 4. View Results
-Navigate to your k6-control-panel URL.
+    1. Navigate to your `k6-control-panel` URL.
 
-Click /start-replay to trigger the on-demand aggregation engine.
+    2. Click `/start-replay` to trigger the on-demand aggregation engine.
 
-Once the terminal UI indicates SUCCESS, open the k6-replay-server URL in a new tab to view your interactive Kafka dashboard.
+    3. Once the terminal UI indicates SUCCESS, open the `k6-replay-server` URL in a new tab to view your interactive Kafka dashboard.
 
-(Optional) Click /reset on the Control Panel to wipe the data directory before starting a new test iteration.
+    4. (Optional) Click `/reset` on the Control Panel to wipe the data directory before starting a new test iteration.
 
 ---
 
-## Script Configuration & Telemetry
-The core load generation script (scripts/kafka-perf-framework.js) is designed to be environment-agnostic. All Kafka connection details, credentials, and telemetry outputs are controlled dynamically via the OpenShift Job manifests (k8s/workers/*.yaml), meaning the JavaScript code never needs to be modified between environments.
+### Script Configuration & Telemetry
+The core load generation script (`tests/kafka-perf-framework.js`) is designed to be environment-agnostic. All Kafka connection details, credentials, and telemetry outputs are controlled dynamically via the OpenShift Job manifests (`k8s/workers/*.yaml`), meaning the JavaScript code never needs to be modified between environments.
 
-1. Environment Variables (Kafka Configuration)      
-Inside your Job manifests, configure the test parameters using standard Kubernetes env blocks:
+1. Environment Variables (Kafka Configuration)
+Inside your Job manifests, configure the test parameters using standard Kubernetes `env` blocks:
 
-    - KAFKA_BROKERS: Comma-separated list of bootstrap servers.
+- `KAFKA_BROKERS`: Comma-separated list of bootstrap servers.
 
-    - KAFKA_TOPIC: The target topic for the Producer/Consumer.
+- `KAFKA_TOPIC`: The target topic for the Producer/Consumer.
 
-    - PRODUCER_SCALING / CONSUMER_SCALING: Adjust VU (Virtual User) counts and throughput limits.
+- `PRODUCER_SCALING` / `CONSUMER_SCALING`: Adjust VU (Virtual User) counts and throughput limits.
 
+2. Telemetry Output Modes
 
-2. Telemetry Output Modes       
-Because generating 800MB+ of raw metric data per minute is not ideal for every scenario, you can toggle the observability output mode directly in the args of your Job manifests:
-
-    **Mode A:** Headless / Console-Only (Zero Telemetry Overhead)
+    **Mode A: Headless / Console-Only (Zero Telemetry Overhead)**
 
     * **Best For:** Ultra-high-throughput testing, long-running soak tests, or quick validation runs where you want zero performance degradation caused by metric export disk I/O or network traffic.
-    * **How It Works:** Each `k6` worker pod runs completely isolated. Metrics are aggregated in-memory during execution, and upon test completion, `k6` prints its native summary table directly to standard output (`stdout`).
 
-    1. Manifest Configuration
-    Simply execute `k6 run` without any `--out` flags or external `curl` POST commands in your OpenShift Job manifest:
+    * **How It Works:** Each `k6` worker pod runs completely isolated. Metrics are printed directly to `stdout`.
 
         ```yaml
-        apiVersion: batch/v1
-        kind: Job
-        metadata:
-        name: k6-producer-headless
-        namespace: performance-testing
-        spec:
-        template:
-            spec:
-            containers:
-                - name: k6-worker
-                image: [your-corporate-registry.com/perf/k6-ubi:latest](https://your-corporate-registry.com/perf/k6-ubi:latest)
-                command: ["/bin/sh"]
-                args:
-                    - "-c"
-                    - "k6 run /script/kafka-perf-framework.js"
+        # k8s/workers/k6-producer-headless-job.yaml
+        args: ["-c", "k6 run /script/kafka-perf-framework.js"]
         ```
-
-    2. Inspecting Results
-    Since metrics are not pushed to an external server or aggregator, final performance statistics are retrieved directly from the pod logs.
-
-    - View results for a specific worker pod:
-
+        
+        Retrieve statistics directly from the pod logs:
+        
         ```bash
         oc logs job/k6-producer-headless -n performance-testing
         ```
 
-    - Stream or aggregate logs across all active worker pods:
+    **Mode B: Serverless Aggregator (Short-to-Medium Tests)**
 
-        ```bash
-        oc logs -l app=k6-worker -n performance-testing --tail=-1
-        ```
+    * **Best For:** Deep-dive debugging, isolated testing, and rich, interactive HTML reports without spinning up persistent monitoring infrastructure.
 
-        Output Example:     
-        Each pod's log will conclude with a self-contained performance report:
-        ```text
-        █ kafka_writer_message_count.....: 500000   16666.66/s
-                █ kafka_writer_message_bytes.....: 512 MB   17.06 MB/s
-                █ kafka_writer_write_seconds.....: avg=21µs min=2µs med=18µs max=3.1ms p(90)=35µs p(95)=42µs
-                █ vus............................: 50       min=50     max=50
-                █ vus_max........................: 50       min=50     max=50
-        ```
+    * **Configuration:** Output to JSON and POST the data to the custom Python Aggregator.
 
-
-    **Mode B:** Serverless Aggregator (Short-to-Medium Tests)       
-    -   **Best for:** Deep-dive debugging, isolated testing, and rich, interactive HTML reports without spinning up persistent monitoring infrastructure.
-    - **Configuration:** Output to JSON and use the curl command to POST the data to the custom Python Aggregator.
         ```yaml
+        # k8s/workers/k6-producer-job-metrics-web.yaml
         args: 
         - "-c"
         - >
@@ -192,92 +164,45 @@ Because generating 800MB+ of raw metric data per minute is not ideal for every s
             curl -X POST --data-binary @/tmp/raw-metrics.json '[http://k6-aggregator.performance-testing.svc:8080/upload/$](http://k6-aggregator.performance-testing.svc:8080/upload/$){POD_NAME}.json?role=producer&total=${EXPECTED_PODS}'
         ```
 
-    **Mode C:** Prometheus / Grafana Stack (Long-Running / Massive Tests)       
-    - **Best for:** Multi-hour endurance testing, soak tests, or massive horizontal scaling where JSON aggregation would overwhelm memory limits.
+    **Mode C: Prometheus / OpenTelemetry (Long-Running / Massive Tests)**
+    
+    * **Best For:** Multi-hour endurance testing, soak tests, or massive horizontal scaling where JSON aggregation would overwhelm memory limits.
 
-    - **Configuration:** Use k6's native Prometheus Remote Write capabilities to stream metrics directly to your OpenShift Prometheus instance.
+    * **Configuration:** Stream metrics directly to OpenTelemetry or Prometheus Remote Write targets.
+
         ```yaml
+        # k8s/workers/k6-producer-job-metrics-otel.yaml
         env:
         - name: K6_PROMETHEUS_RW_SERVER_URL
-          value: "[http://prometheus-operated.monitoring.svc:9090/api/v1/write](http://prometheus-operated.monitoring.svc:9090/api/v1/write)"
+            value: "[http://prometheus-operated.monitoring.svc:9090/api/v1/write](http://prometheus-operated.monitoring.svc:9090/api/v1/write)"
         args: 
-          - "-c"
-          - "k6 run --out experimental-prometheus-rw /script/kafka-perf-framework.js"
+        - "-c"
+        - "k6 run --out experimental-prometheus-rw /script/kafka-perf-framework.js"
+        ```
+
+    **Mode D: Scheduled Jobs (Automated / Recurring Workloads)**
+
+    * **Best For:** Nightly performance regressions, periodic cluster baseline benchmarks, or automated soak testing scheduled during off-peak hours.
+
+        ```yaml
+        # k8s/workers/k6-producer-sched-job-metrics-web.yaml
+        apiVersion: batch/v1
+        kind: CronJob
+        metadata:
+        name: k6-kafka-scheduled-test
+        namespace: performance-testing
+        spec:
+        schedule: "0 2 * * *" # Runs daily at 02:00 AM
+        jobTemplate:
+            spec:
+            template:
+                spec:
+                restartPolicy: Never
+                containers:
+                    - name: k6-worker
+                    image: [your-corporate-registry.com/perf/k6-ubi:latest](https://your-corporate-registry.com/perf/k6-ubi:latest)
+                    command: ["/bin/sh"]
+                    args: ["-c", "k6 run /script/kafka-perf-framework.js"]
         ```
 
 ---
-
-## Scheduled Jobs (Automated / Recurring Workloads)
-
-* **Best For:** Nightly performance regressions, periodic cluster baseline benchmarks, or automated soak testing scheduled during off-peak hours.
-* **How It Works:** Utilizes standard Kubernetes `CronJob` resources to automatically trigger ephemeral `k6` worker pods according to a defined cron schedule. This pattern works seamlessly across all telemetry modes (Headless, Serverless Aggregator, or Prometheus).
-
-#### 1. Scheduled Job Manifest (`CronJob`)
-Deploy a `CronJob` resource in place of a standard one-off `Job`. The schedule format follows standard cron syntax (`min hour day-of-month month day-of-week`).
-
-```yaml
-apiVersion: batch/v1
-kind: CronJob
-metadata:
-name: k6-kafka-scheduled-test
-namespace: performance-testing
-spec:
-schedule: "0 2 * * *" # Runs daily at 02:00 AM
-concurrencyPolicy: Forbid # Prevents overlapping test runs if a previous run exceeds 24h
-successfulJobsHistoryLimit: 3
-failedJobsHistoryLimit: 5
-jobTemplate:
-    spec:
-    template:
-        metadata:
-        labels:
-            app: k6-scheduled-worker
-        spec:
-        restartPolicy: Never
-        containers:
-            - name: k6-worker
-            image: [your-corporate-registry.com/perf/k6-ubi:latest](https://your-corporate-registry.com/perf/k6-ubi:latest)
-            command: ["/bin/sh"]
-            args:
-                - "-c"
-                - "k6 run /script/kafka-perf-framework.js"
-            env:
-                - name: KAFKA_BROKERS
-                value: "kafka-cluster-kafka-bootstrap.kafka.svc:9092"
-                - name: KAFKA_TOPIC
-                value: "scheduled-perf-metrics"
-```
-
-#### 2. Managing Scheduled Runs
-- Apply or update the scheduled test:
-
-    ```bash
-    oc apply -f k8s/workers/k6-scheduled-job.yaml
-    ```
-
-- Manually trigger an immediate run (out-of-schedule):
-
-    ```bash
-    oc create job --from=cronjob/k6-kafka-scheduled-test k6-manual-run-$(date +%s) -n performance-testing
-    ```
-
-- Pause/Suspend scheduled execution:
-
-    ```bash
-    oc patch cronjob k6-kafka-scheduled-test -p '{"spec":{"suspend":true}}' -n performance-testing
-    ```
-- Resume scheduled execution:
-
-    ```bash
-    oc patch cronjob k6-kafka-scheduled-test -p '{"spec":{"suspend":false}}' -n performance-testing
-    ```
-
-- View history of scheduled executions:
-
-    ```bash
-    oc get cronjob k6-kafka-scheduled-test -n performance-testing
-    oc get jobs -l app=k6-scheduled-worker -n performance-testing
-    ```
-
----
-
