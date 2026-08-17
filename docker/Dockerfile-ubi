@@ -24,9 +24,32 @@ USER 1001
 WORKDIR /opt/app-root/src
 
 # Install xk6 and build the custom binary
-RUN go install go.k6.io/xk6/cmd/xk6@latest && \
-    CGO_ENABLED=1 /opt/app-root/src/go/bin/xk6 build \
-    --with github.com/mostafa/xk6-kafka/v2@v2.1.0
+# RUN go install go.k6.io/xk6/cmd/xk6@latest && \
+#    CGO_ENABLED=1 /opt/app-root/src/go/bin/xk6 build latest \
+#    --with github.com/mostafa/xk6-kafka/v2@latest
+
+# Copy a patched source code into the builder container
+#COPY --from=shared-context ./xk6-kafka /opt/app-root/src/xk6-kafka
+
+# Instruct xk6 to build using the local directory instead of @latest
+#RUN go install go.k6.io/xk6/cmd/xk6@latest && \
+#    CGO_ENABLED=1 /opt/app-root/src/go/bin/xk6 build latest \
+#    --with github.com/mostafa/xk6-kafka/v2=/opt/app-root/src/xk6-kafka
+
+# Copy the patched source code into the builder container
+COPY --chown=1001:0 --from=shared-context ./xk6-kafka /opt/app-root/src/xk6-kafka
+
+# 1. Navigate into the local extension
+# 2. Force it to update its k6 dependency to the latest version
+# 3. Clean up the module graph
+# 4. Build the final binary
+RUN cd /opt/app-root/src/xk6-kafka && \
+    go get go.k6.io/k6@latest && \
+    go mod tidy && \
+    go install go.k6.io/xk6/cmd/xk6@latest && \
+    CGO_ENABLED=1 /opt/app-root/src/go/bin/xk6 build latest \
+    --with github.com/mostafa/xk6-kafka/v2=/opt/app-root/src/xk6-kafka
+
 
 # ==========================================
 # STAGE 2: OpenShift-Compatible Runtime
@@ -44,7 +67,8 @@ USER 1001
 WORKDIR /home/k6user
 
 # Copy the compiled binary from the builder
-COPY --from=builder /opt/app-root/src/k6 /usr/local/bin/k6
-COPY ./tests/kafka-perf-framework.js /home/k6user/kafka-perf-framework.js
+#COPY --from=builder /opt/app-root/src/k6 /usr/local/bin/k6
+COPY --from=builder /opt/app-root/src/xk6-kafka/k6 /usr/local/bin/k6
+COPY --from=shared-context ./tests/kafka-perf-framework.js /home/k6user/kafka-perf-framework.js
 
 ENTRYPOINT ["k6"]

@@ -14,10 +14,26 @@ spec:
         app: k6-scaled-test-producer-consumer
     spec:
       restartPolicy: Never
+
+      # Required so the init context doesn't crash on open()
+      initContainers:
+      - name: payload-generator
+        image: docker.io/gennady73/k6v2ubi9 
+        command: ["/bin/bash", "/script/generate-payloads.sh"]
+        volumeMounts:
+        - name: script-volume
+          mountPath: /script
+        - name: payload-volume
+          mountPath: /mnt/payloads
+
       containers:
       - name: k6-runner
         image: docker.io/gennady73/k6v2ubi9
+
+        workingDir: /tmp
+
         command: ["k6", "run", "/script/kafka-perf-framework.js"]
+
         env:
           - name: KAFKA_BROKERS
             value: "observ-kafka-kafka-bootstrap.observ-kafka.svc:9092"
@@ -25,7 +41,21 @@ spec:
             value: "http://registry-svc.performance-testing.svc:8080/apis/ccompat/v6"
           - name: KAFKA_TOPIC
             value: "performance_evaluation_pipeline_pb"
-          
+
+          # Critical for the consumer to accept more than 1MB incoming records
+          - name: CLIENT_MAX_BYTES
+            value: "104857600" # 100MB 
+  
+          - name: EXPECTED_PODS
+            value: "1" 
+          - name: TEST_DURATION
+            value: "10s"
+
+          - name: POD_NAME
+            valueFrom:
+              fieldRef:
+                fieldPath: metadata.name
+
           # THE ROLE DIAL: Set to "PRODUCER" or "CONSUMER"
           - name: TEST_ROLE
             value: "CONSUMER" 
@@ -35,11 +65,13 @@ spec:
           
           # THE LOAD DIAL: Remember this is PER POD
           - name: TARGET_RPS
-            value: "2500" 
+            value: "1"
           - name: MAX_VUS
-            value: "5"       
+            value: "2"
           - name: GOMAXPROCS
-            value: "2" 
+            value: "2"
+          - name: PAYLOAD_SIZE
+            value: "5m" # Dynamically select "256b", "1k", "1m", or "5m"
 
         resources:
           requests:
@@ -47,11 +79,19 @@ spec:
             memory: "2048Mi"
           limits:
             cpu: "3000m"      
-            memory: "2048Mi"  # Given your metrics, give it some breathing room
+            memory: "2048Mi"
         volumeMounts:
         - name: script-volume
           mountPath: /script
+        # Mount the payload volume
+        - name: payload-volume
+          mountPath: /mnt/payloads
+
       volumes:
       - name: script-volume
         configMap:
           name: kafka-perf-script
+      # Define the emptyDir volume
+      - name: payload-volume
+        emptyDir:
+          sizeLimit: 50Mi

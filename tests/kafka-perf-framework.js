@@ -1,5 +1,8 @@
 import { check, sleep } from "k6";
-import { uuidv4 } from "https://jslib.k6.io/k6-utils/1.6.0/index.js";
+    
+// AIR-GAP SAFE: Import locally from the ConfigMap volume
+import { uuidv4 } from "/script/k6-utils.js"; 
+
 import { 
     Producer, 
     Consumer, 
@@ -12,37 +15,58 @@ import {
 } from "k6/x/kafka";
 
 // =============================================================================
-// FRAMEWORK CONFIGURATION (Driven by CLI Environment Variables)
+// 1. FRAMEWORK CONFIGURATION 
 // =============================================================================
-const BROKERS = (__ENV.KAFKA_BROKERS || "localhost:9092").split(",");
-const TOPIC = __ENV.KAFKA_TOPIC || "performance_evaluation_pipeline";
-const REGISTRY_URL = __ENV.SCHEMA_REGISTRY_URL || "http://localhost:8081";
+const CONFIG = {
+    // Infrastructure
+    brokers: (__ENV.KAFKA_BROKERS || "localhost:9092").split(","),
+    topic: __ENV.KAFKA_TOPIC || "performance_evaluation_pipeline",
+    registryUrl: __ENV.SCHEMA_REGISTRY_URL || "http://localhost:8081",
+    
+    // Execution Profile
+    role: __ENV.TEST_ROLE || "PRODUCER",               // PRODUCER, CONSUMER
+    payloadSize: __ENV.PAYLOAD_SIZE || "1k",           // e.g., 256b, 1k, 1m, 5m
+    serialization: __ENV.SERIALIZATION_TYPE || "JSON", // STRING, JSON, AVRO, PROTOBUF
+    compression: __ENV.COMPRESSION_TYPE || "SNAPPY",   // SNAPPY, ZSTD, GZIP, NONE
+    
+    // Load Dial
+    targetRps: parseInt(__ENV.TARGET_RPS || "5000", 10),
+    duration: __ENV.TEST_DURATION || "5m",
+    maxVus: parseInt(__ENV.MAX_VUS || "100", 10),
 
-// Options: STRING, JSON, AVRO, PROTOBUF
-const SERIALIZATION = __ENV.SERIALIZATION_TYPE || "JSON"; 
-
-// Options: PRODUCER, CONSUMER
-const ROLE = __ENV.TEST_ROLE || "PRODUCER"; 
-
-// Options: SNAPPY, ZSTD, GZIP, NONE
-const COMPRESSION = __ENV.COMPRESSION_TYPE || "SNAPPY"; 
-
-const TARGET_RPS = parseInt(__ENV.TARGET_RPS || "5000", 10);
-const DURATION = __ENV.TEST_DURATION || "5m";
-const MAX_VUS = parseInt(__ENV.MAX_VUS || "100", 10);
+    // Advanced Kafka Limits
+    clientMaxBytes: parseInt(__ENV.CLIENT_MAX_BYTES || "104857600", 10), 
+    topicMaxBytes: __ENV.TOPIC_MAX_BYTES || "10485760", 
+    batchMessages: parseInt(__ENV.MAX_BATCH_MESSAGES || "65536", 10),
+    batchBytes: parseInt(__ENV.MAX_BATCH_BYTES || "52428800", 10), // 50MB
+};
 
 // =============================================================================
-// K6 SCENARIO RUNTIME DESIGN
+// 2. PRE-LOADED PAYLOAD STORAGE
+// =============================================================================
+const payloadPath = `/mnt/payloads/message-${CONFIG.payloadSize}.json`;
+let SELECTED_PAYLOAD_STRING;
+
+try {
+    SELECTED_PAYLOAD_STRING = open(payloadPath);
+    console.log(`[INIT] Successfully loaded payload from: ${payloadPath}`);
+} catch (error) {
+    console.error(`[FATAL] Could not read payload file at ${payloadPath}`);
+    throw error;
+}
+
+// =============================================================================
+// 3. K6 SCENARIO RUNTIME DESIGN
 // =============================================================================
 export const options = {
     scenarios: {
         throughput_test: {
             executor: "constant-arrival-rate",
-            rate: TARGET_RPS,
+            rate: CONFIG.targetRps,
             timeUnit: "1s",
-            duration: DURATION,
-            preAllocatedVUs: Math.min(50, MAX_VUS),
-            maxVUs: MAX_VUS,
+            duration: CONFIG.duration,
+            preAllocatedVUs: Math.min(50, CONFIG.maxVus),
+            maxVUs: CONFIG.maxVus,
         },
     },
     thresholds: {
@@ -52,61 +76,62 @@ export const options = {
 };
 
 // =============================================================================
-// INITIALIZATION AND REGISTRY RESOLUTION
+// 4. CLIENT INITIALIZATION & SCHEMA REGISTRY
 // =============================================================================
-const adminClient = new AdminClient({ brokers: BROKERS });
-const schemaRegistry = new SchemaRegistry({ url: REGISTRY_URL });
+const adminClient = new AdminClient({ brokers: CONFIG.brokers });
+const schemaRegistry = new SchemaRegistry({ url: CONFIG.registryUrl });
 
-// Configure client instances at module level to reuse persistent TCP pools
 let producer = null;
 let consumer = null;
 
-if (ROLE === "PRODUCER") {
+if (CONFIG.role === "PRODUCER") {
     producer = new Producer({
-        brokers: BROKERS,
-        topic: TOPIC,
-        // Convert to lowercase string (e.g., "snappy", "zstd") for xk6-kafka v2
-        compression: COMPRESSION === "NONE" ? null : COMPRESSION.toLowerCase(),
-        // Allow batch buffering to maximize throughput
-        batchSize: 16384, 
-        batchBytes: 1048576 * 2, // 2MB raw uncompressed batch limit
+        brokers: CONFIG.brokers,
+        compression: CONFIG.compression === "NONE" ? null : CONFIG.compression.toLowerCase(),
+        batchSize: CONFIG.batchMessages, 
+        batchBytes: CONFIG.batchBytes, 
+        extraConfig: {
+            "message.max.bytes": String(CONFIG.clientMaxBytes), 
+        },
     });
 } else {
     consumer = new Consumer({
-        brokers: BROKERS,
-        topic: TOPIC,
-        // Append a unique UUID to prevent partition-assignment starvation
-        groupId: `xk6_perf_group_${SERIALIZATION.toLowerCase()}_${uuidv4().substring(0, 8)}`, 
+        brokers: CONFIG.brokers,
+        topic: CONFIG.topic,
+        groupId: `xk6_perf_group_${CONFIG.serialization.toLowerCase()}_${uuidv4().substring(0, 8)}`, 
+        maxBytes: CONFIG.clientMaxBytes, // Natively maps to fetch.max.bytes
+        extraConfig: {
+            "message.max.bytes": String(CONFIG.clientMaxBytes),
+        },
     });
 }
 
 // Ensure the target Schema exists or retrieve it
 let valueSchemaObject = null;
-if (SERIALIZATION === "AVRO" || SERIALIZATION === "PROTOBUF") {
+if (CONFIG.serialization === "AVRO" || CONFIG.serialization === "PROTOBUF") {
     try {
         valueSchemaObject = schemaRegistry.getSchema({ 
-            subject: `${TOPIC}-value` 
+            subject: `${CONFIG.topic}-value` 
         });
     } catch (e) {
-        // If not registered, create the correct schema based on the requested type
-        if (SERIALIZATION === "AVRO") {
+        if (CONFIG.serialization === "AVRO") {
             const avroSchema = `{"type":"record","name":"Event","namespace":"perf","fields":[{"name":"id","type":"string"},{"name":"timestamp","type":"long"},{"name":"payload","type":"string"}]}`;
             valueSchemaObject = schemaRegistry.createSchema({
-                subject: `${TOPIC}-value`,
+                subject: `${CONFIG.topic}-value`,
                 schema: avroSchema,
                 schemaType: SCHEMA_TYPE_AVRO
             });
-        } else if (SERIALIZATION === "PROTOBUF") {
+        } else if (CONFIG.serialization === "PROTOBUF") {
             const protoSchema = `
             syntax = "proto3";
             package perf;
             message Event {
-              string id = 1;
-              int64 timestamp = 2;
-              string payload = 3;
+            string id = 1;
+            int64 timestamp = 2;
+            string payload = 3;
             }`;
             valueSchemaObject = schemaRegistry.createSchema({
-                subject: `${TOPIC}-value`,
+                subject: `${CONFIG.topic}-value`,
                 schema: protoSchema,
                 schemaType: SCHEMA_TYPE_PROTOBUF
             });
@@ -115,50 +140,47 @@ if (SERIALIZATION === "AVRO" || SERIALIZATION === "PROTOBUF") {
 }
 
 // =============================================================================
-// SETUP LIFECYCLE (Executes once before load runs)
+// 5. SETUP LIFECYCLE (Executes once before load runs)
 // =============================================================================
 export function setup() {
-    console.log(` Ensuring topic '${TOPIC}' exists...`);
+    console.log(`[SETUP] Ensuring topic '${CONFIG.topic}' exists...`);
     
-    // Fetch the current list of topics
     const currentTopics = adminClient.listTopics();
-    
-    // Validate existence using the correct v2 property ('topic' instead of 'name')
-    const topicExists = currentTopics.some(t => t.topic === TOPIC || t.name === TOPIC);
+    const topicExists = currentTopics.some(t => t.topic === CONFIG.topic || t.name === CONFIG.topic);
 
     if (!topicExists) {
-        console.log(` Topic '${TOPIC}' not found. Creating it now...`);
+        console.log(`[SETUP] Topic '${CONFIG.topic}' not found. Creating it now...`);
         try {
             adminClient.createTopic({ 
-                topic: TOPIC, 
-                numPartitions: 12, // High-throughput layout
-                replicationFactor: 1 
+                topic: CONFIG.topic, 
+                numPartitions: 12, 
+                replicationFactor: 1,
+                configEntries: [
+                    {
+                        configName: "max.message.bytes",
+                        configValue: String(CONFIG.topicMaxBytes)
+                    }
+                ]
             });
-            
-            // Allow metadata to propagate across the cluster
             sleep(2); 
-            console.log(` Topic '${TOPIC}' created successfully.`);
-            
+            console.log(`[SETUP] Topic '${CONFIG.topic}' created successfully.`);
         } catch (error) {
-            // Gracefully catch Confluent driver race conditions
-            if (!error.message.includes("already exists")) {
-                throw error;
-            }
-            console.log(` Topic '${TOPIC}' was created concurrently.`);
+            if (!error.message.includes("already exists")) throw error;
+            console.log(`[SETUP] Topic '${CONFIG.topic}' was created concurrently.`);
         }
     } else {
-        console.log(` Topic '${TOPIC}' already exists. Skipping creation.`);
+        console.log(`[SETUP] Topic '${CONFIG.topic}' already exists.`);
     }
 }
 
 // =============================================================================
-// CORE LOAD ITERATION
+// 6. CORE LOAD ITERATION
 // =============================================================================
 export default function () {
     const correlationId = uuidv4();
     const timestamp = new Date().getTime();
 
-    if (ROLE === "PRODUCER") {
+    if (CONFIG.role === "PRODUCER") {
         let serializedKey;
         let serializedValue;
 
@@ -166,59 +188,29 @@ export default function () {
         const messageValue = { 
             id: correlationId, 
             timestamp: timestamp, 
-            payload: "High-throughput performance verification event." 
+            payload: SELECTED_PAYLOAD_STRING
         };
 
-        // Dynamically encode matching your serialization target configuration
-        if (SERIALIZATION === "JSON") {
-            serializedKey = schemaRegistry.serialize({
-                data: messageKey,
-                schemaType: SCHEMA_TYPE_JSON,
-            });
-            serializedValue = schemaRegistry.serialize({
-                data: messageValue,
-                schemaType: SCHEMA_TYPE_JSON,
-            });
-        } else if (SERIALIZATION === "AVRO") {
-            serializedKey = schemaRegistry.serialize({
-                data: correlationId,
-                schemaType: SCHEMA_TYPE_STRING,
-            });
-            serializedValue = schemaRegistry.serialize({
-                data: messageValue,
-                schema: valueSchemaObject,
-                schemaType: SCHEMA_TYPE_AVRO,
-            });
-        } else if (SERIALIZATION === "PROTOBUF") {
-            serializedKey = schemaRegistry.serialize({
-                data: correlationId,
-                schemaType: SCHEMA_TYPE_STRING,
-            });
-            serializedValue = schemaRegistry.serialize({
-                data: messageValue,
-                schema: valueSchemaObject,
-                schemaType: SCHEMA_TYPE_PROTOBUF, 
-            });
+        if (CONFIG.serialization === "JSON") {
+            serializedKey = schemaRegistry.serialize({ data: messageKey, schemaType: SCHEMA_TYPE_JSON });
+            serializedValue = schemaRegistry.serialize({ data: messageValue, schemaType: SCHEMA_TYPE_JSON });
+        } else if (CONFIG.serialization === "AVRO") {
+            serializedKey = schemaRegistry.serialize({ data: correlationId, schemaType: SCHEMA_TYPE_STRING });
+            serializedValue = schemaRegistry.serialize({ data: messageValue, schema: valueSchemaObject, schemaType: SCHEMA_TYPE_AVRO });
+        } else if (CONFIG.serialization === "PROTOBUF") {
+            serializedKey = schemaRegistry.serialize({ data: correlationId, schemaType: SCHEMA_TYPE_STRING });
+            serializedValue = schemaRegistry.serialize({ data: messageValue, schema: valueSchemaObject, schemaType: SCHEMA_TYPE_PROTOBUF });
         } else {
-            serializedKey = schemaRegistry.serialize({
-                data: correlationId,
-                schemaType: SCHEMA_TYPE_STRING,
-            });
-            serializedValue = schemaRegistry.serialize({
-                data: "Raw String Performance Verification",
-                schemaType: SCHEMA_TYPE_STRING,
-            });
+            serializedKey = schemaRegistry.serialize({ data: correlationId, schemaType: SCHEMA_TYPE_STRING });
+            serializedValue = schemaRegistry.serialize({ data: SELECTED_PAYLOAD_STRING, schemaType: SCHEMA_TYPE_STRING });
         }
 
-        // Dispatch performance payloads to Kafka
         producer.produce({
-            messages: [{ key: serializedKey, value: serializedValue }]
+            messages: [{ topic: CONFIG.topic, key: serializedKey, value: serializedValue }]
         });
 
     } else {
-        // CONSUMER ROLE: Consume a batch and assert throughput state
-        const consumed = consumer.consume({ maxMessages: 100 });
-        
+        const consumed = consumer.consume({ maxMessages: 100, expectTimeout: true });
         check(consumed, {
             "Consumer fetched messages successfully": (msg) => msg.length > 0
         });
@@ -226,10 +218,10 @@ export default function () {
 }
 
 // =============================================================================
-// TEARDOWN LIFECYCLE (Resource Cleanup)
+// 7. TEARDOWN LIFECYCLE
 // =============================================================================
 export function teardown() {
-    console.log(" Closing connection handles...");
+    console.log("[TEARDOWN] Closing connection handles...");
     if (producer) producer.close();
     if (consumer) consumer.close();
     adminClient.close();

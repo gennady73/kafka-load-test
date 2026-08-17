@@ -5,8 +5,8 @@ metadata:
   namespace: performance-testing
 spec:
   # THE SCALING DIAL: Change this from 1 to 3 to instantly scale out
-  parallelism: 3 
-  completions: 3 # Must match parallelism so the Job knows when it is fully "Done"
+  parallelism: 2 
+  completions: 2 # Must match parallelism so the Job knows when it is fully "Done"
   backoffLimit: 0 
   template:
     metadata:
@@ -14,9 +14,21 @@ spec:
         app: k6-load-test-producer-consumer
     spec:
       restartPolicy: Never
+      
+      initContainers:
+      - name: payload-generator
+        image: docker.io/gennady73/k6v2ubi9 # Reusing image since it has bash/tr/head
+        command: ["/bin/bash", "/script/generate-payloads.sh"]
+        volumeMounts:
+        - name: script-volume
+          mountPath: /script
+        - name: payload-volume
+          mountPath: /mnt/payloads
+
       containers:
       - name: k6-runner
         image: docker.io/gennady73/k6v2ubi9
+        imagePullPolicy: Always # IfNotPresent
 
         workingDir: /tmp
 
@@ -40,11 +52,11 @@ spec:
           - name: SCHEMA_REGISTRY_URL
             value: "http://registry-svc.performance-testing.svc:8080/apis/ccompat/v6"
           - name: KAFKA_TOPIC
-            value: "performance_evaluation_pipeline_pb"
+            value: "performance_evaluation_pb_v1"
 
           # The pod passes its expected parallelism to the aggregator and runs for given duration  
           - name: EXPECTED_PODS
-            value: "3" 
+            value: "1" 
           - name: TEST_DURATION
             value: "30s"
 
@@ -56,18 +68,19 @@ spec:
           # THE ROLE DIAL: Set to "PRODUCER" or "CONSUMER"
           - name: TEST_ROLE
             value: "PRODUCER" 
-          
+
           - name: SERIALIZATION_TYPE
             value: "PROTOBUF"
           
           # THE LOAD DIAL: Remember this is PER POD
           - name: TARGET_RPS
-            value: "2500" 
+            value: "1"
           - name: MAX_VUS
-            value: "100"       
+            value: "2"
           - name: GOMAXPROCS
-            value: "2" 
-
+            value: "2"
+          - name: PAYLOAD_SIZE
+            value: "5m" # Dynamically select "256b", "1k", "1m", or "5m"
 
         resources:
           requests:
@@ -79,7 +92,13 @@ spec:
         volumeMounts:
         - name: script-volume
           mountPath: /script
+        - name: payload-volume
+          mountPath: /mnt/payloads
+
       volumes:
       - name: script-volume
         configMap:
           name: kafka-perf-script
+      - name: payload-volume
+        emptyDir:
+          sizeLimit: 50Mi

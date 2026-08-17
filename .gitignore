@@ -36,6 +36,7 @@ pnpm-debug.log*
 # ==========================================
 k6
 xk6build/
+xk6-kafka/
 *.exe
 *.exe?
 *.dll
