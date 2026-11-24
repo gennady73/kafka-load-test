@@ -1,0 +1,17 @@
+{
+  "run_id": "offline-fixture-only", "fixture": true, "profile_id": "WP-A",
+  "seed": 1732026, "workers": 3, "duration_seconds": 60,
+  "target_value_payload_bytes": 120000, "target_tolerance_fraction": 0.01,
+  "required_acks": -1, "max_application_retries": 1, "drain_limit_seconds": 10,
+  "producer_windows": [
+    {"start_seconds":0,"end_seconds":20,"weight":1,"max_value_bytes_per_second_per_worker":2000},
+    {"start_seconds":30,"end_seconds":60,"weight":2,"max_value_bytes_per_second_per_worker":2000}
+  ],
+  "topics": [{"name":"synthetic-fixture", "budget_bytes":120000,"record_count":60,
+    "minimum_payload_bytes":1000,"maximum_payload_bytes":3000,
+    "size_distribution":"uniform_feasible_fixed_count", "content_distribution":"seeded_ascii",
+    "key_distribution":"record_id", "serialization":"raw_utf8", "compression":"none"}],
+  "consumer_groups": [{"group_id":"fixture-reader", "topics":["synthetic-fixture"],
+    "offset_reset":"earliest", "commit_policy":"manual_after_verified_batch", "require_full_run":true,
+    "schedule":{"start_seconds":[0,5],"active_seconds":[5,10],"idle_seconds":[1,4],"concurrency":[1,2]}}]
+}
