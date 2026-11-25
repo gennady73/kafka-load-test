@@ -1,0 +1,537 @@
+{
+  "contract_version": "c2-tenant-r2-0.1",
+  "date": "2026-11-25",
+  "status": "PROPOSED_OFFLINE_INTERFACE_NOT_RUNNABLE",
+  "execution_enabled": false,
+  "deployment_enabled": false,
+  "tests_enabled": false,
+  "execution_ready": false,
+  "scope": "shared_first_existing_kafka_two_tenant_client_preparation",
+  "source": {
+    "srs_revision": "0.9",
+    "review": "docs/coordination/C1-C7-progress-review-2026-11-25.md",
+    "tenant_resource_revision": "3211df93ae40d7d6f47c6334966ae6d1f658fee7",
+    "tenant_resource_sha256": {
+      "environments/sandbox-tenants/a/resources.yaml": "bdc9f7a3b69ec182acb8933aa4f2fddc94fd95c0c7f035c0a9ee75c69ebd9923",
+      "environments/sandbox-tenants/b/resources.yaml": "abf4d52179899de35fd71ee11918365e198c5a6c327c961446b2ed7cbfb9b7e5"
+    },
+    "utility_revision": "963db2d41b6dc140d661c96e108f1c09a7c76da5",
+    "registered_metadata_package_revision": "ac2f57b1faedae88028486073abf597256a172af"
+  },
+  "target": {
+    "environment": "sandbox3088",
+    "cluster": "kaas-dev",
+    "kafka_namespace": "kaas-kafka",
+    "proposed_client_namespace": "kaas-demo",
+    "bootstrap_endpoints_from_saved_evidence": [
+      "kaas-dev-kafka-bootstrap.kaas-kafka.svc:9093"
+    ],
+    "advertised_broker_endpoint_evidence_reference": null,
+    "effective_network_policy_reference": null,
+    "external_listener_required_for_this_case": false
+  },
+  "security": {
+    "protocol": "SASL_SSL",
+    "mechanism": "SCRAM-SHA-512",
+    "hostname_verification": true,
+    "expected_ca_source_reference": "kaas-kafka/kaas-dev-cluster-ca-cert",
+    "ca_destination_reference": null,
+    "proposed_ca_mount_path": "/credentials/cluster-ca/ca.crt",
+    "ca_chain_san_expiry_evidence_reference": null,
+    "credential_values_in_contract": false
+  },
+  "candidate_client": {
+    "image_reference_from_tested_smoke": "image-registry.openshift-image-registry.svc:5000/kaas-demo/kaas-xk6-verified-20261124@sha256:f66c3f86f2365b219c590d1d3c580ea41fcc4ab2ba74fc1efb2ae72d93be0df2",
+    "binary_sha256_from_tested_smoke": "6c705c09c17c9773158ef08d4446531855d37ab0b20ad5aaee41decd949604ec",
+    "k6_version_from_tested_smoke": "1.7.1",
+    "current_image_and_pod_pull_verification_reference": null,
+    "adapter_status": "ADDITIVE_TENANT_ADAPTER_NOT_IMPLEMENTED",
+    "raw_utf8_values": true,
+    "compression": "none",
+    "producer_required_acks": -1,
+    "maximum_application_attempts_per_id": 1,
+    "native_message_max_bytes": 3145728,
+    "consumer_fetch_max_bytes": 4194304,
+    "native_limit_file_path": "/script/kafka-client-limits.txt",
+    "native_delivery_timeout_seconds_candidate": 10,
+    "native_retry_count": null,
+    "idempotence_effective_setting": null,
+    "producer_ack_partition_offset_exposed": false,
+    "commit_policy": "manual_after_verified_durable_receipt",
+    "native_timeout_commit_close_mapping_reference": null,
+    "typed_authorization_failure_mapping_reference": null
+  },
+  "tenants": [
+    {
+      "tenant_id": "kaas-sbx-a",
+      "topics": [
+        {
+          "topic": "kaas-sbx-a-events",
+          "group": "kaas-sbx-a-events-group",
+          "record_count": 4,
+          "original_value_bytes_per_record": 1000,
+          "expected_original_value_bytes": 4000,
+          "replicas": 2,
+          "retention_ms": 21600000,
+          "minimum_isr": 2,
+          "max_message_bytes": 3145728
+        },
+        {
+          "topic": "kaas-sbx-a-audit",
+          "group": "kaas-sbx-a-audit-group",
+          "record_count": 4,
+          "original_value_bytes_per_record": 1000,
+          "expected_original_value_bytes": 4000,
+          "replicas": 2,
+          "retention_ms": 21600000,
+          "minimum_isr": 2,
+          "max_message_bytes": 3145728
+        }
+      ],
+      "roles": {
+        "producer": {
+          "principal": "kaas-sbx-a-producer",
+          "expected_source_secret_reference": "kaas-kafka/kaas-sbx-a-producer",
+          "source_secret_verified": false,
+          "destination_secret_reference": null,
+          "proposed_password_mount_path": "/credentials/kaas-sbx-a-producer/password",
+          "delivery_authority_reference": null,
+          "credential_lifecycle_reference": null,
+          "quotas_declared": {
+            "producerByteRate": 65536,
+            "consumerByteRate": 65536,
+            "requestPercentage": 5
+          },
+          "acls_declared": [
+            {
+              "resource": {
+                "type": "topic",
+                "name": "kaas-sbx-a-events",
+                "patternType": "literal"
+              },
+              "operations": [
+                "Write",
+                "Describe"
+              ]
+            },
+            {
+              "resource": {
+                "type": "topic",
+                "name": "kaas-sbx-a-audit",
+                "patternType": "literal"
+              },
+              "operations": [
+                "Write",
+                "Describe"
+              ]
+            },
+            {
+              "resource": {
+                "type": "cluster"
+              },
+              "operations": [
+                "IdempotentWrite"
+              ]
+            }
+          ]
+        },
+        "consumer": {
+          "principal": "kaas-sbx-a-consumer",
+          "expected_source_secret_reference": "kaas-kafka/kaas-sbx-a-consumer",
+          "source_secret_verified": false,
+          "destination_secret_reference": null,
+          "proposed_password_mount_path": "/credentials/kaas-sbx-a-consumer/password",
+          "delivery_authority_reference": null,
+          "credential_lifecycle_reference": null,
+          "quotas_declared": {
+            "producerByteRate": 65536,
+            "consumerByteRate": 65536,
+            "requestPercentage": 5
+          },
+          "acls_declared": [
+            {
+              "resource": {
+                "type": "topic",
+                "name": "kaas-sbx-a-events",
+                "patternType": "literal"
+              },
+              "operations": [
+                "Read",
+                "Describe"
+              ]
+            },
+            {
+              "resource": {
+                "type": "topic",
+                "name": "kaas-sbx-a-audit",
+                "patternType": "literal"
+              },
+              "operations": [
+                "Read",
+                "Describe"
+              ]
+            },
+            {
+              "resource": {
+                "type": "group",
+                "name": "kaas-sbx-a-events-group",
+                "patternType": "literal"
+              },
+              "operations": [
+                "Read",
+                "Describe"
+              ]
+            },
+            {
+              "resource": {
+                "type": "group",
+                "name": "kaas-sbx-a-audit-group",
+                "patternType": "literal"
+              },
+              "operations": [
+                "Read",
+                "Describe"
+              ]
+            }
+          ]
+        }
+      },
+      "initial_group_offsets_reference": null,
+      "fixture_only_group_ownership_reference": null
+    },
+    {
+      "tenant_id": "kaas-sbx-b",
+      "topics": [
+        {
+          "topic": "kaas-sbx-b-events",
+          "group": "kaas-sbx-b-events-group",
+          "record_count": 4,
+          "original_value_bytes_per_record": 1000,
+          "expected_original_value_bytes": 4000,
+          "replicas": 2,
+          "retention_ms": 21600000,
+          "minimum_isr": 2,
+          "max_message_bytes": 3145728
+        },
+        {
+          "topic": "kaas-sbx-b-audit",
+          "group": "kaas-sbx-b-audit-group",
+          "record_count": 4,
+          "original_value_bytes_per_record": 1000,
+          "expected_original_value_bytes": 4000,
+          "replicas": 2,
+          "retention_ms": 21600000,
+          "minimum_isr": 2,
+          "max_message_bytes": 3145728
+        }
+      ],
+      "roles": {
+        "producer": {
+          "principal": "kaas-sbx-b-producer",
+          "expected_source_secret_reference": "kaas-kafka/kaas-sbx-b-producer",
+          "source_secret_verified": false,
+          "destination_secret_reference": null,
+          "proposed_password_mount_path": "/credentials/kaas-sbx-b-producer/password",
+          "delivery_authority_reference": null,
+          "credential_lifecycle_reference": null,
+          "quotas_declared": {
+            "producerByteRate": 65536,
+            "consumerByteRate": 65536,
+            "requestPercentage": 5
+          },
+          "acls_declared": [
+            {
+              "resource": {
+                "type": "topic",
+                "name": "kaas-sbx-b-events",
+                "patternType": "literal"
+              },
+              "operations": [
+                "Write",
+                "Describe"
+              ]
+            },
+            {
+              "resource": {
+                "type": "topic",
+                "name": "kaas-sbx-b-audit",
+                "patternType": "literal"
+              },
+              "operations": [
+                "Write",
+                "Describe"
+              ]
+            },
+            {
+              "resource": {
+                "type": "cluster"
+              },
+              "operations": [
+                "IdempotentWrite"
+              ]
+            }
+          ]
+        },
+        "consumer": {
+          "principal": "kaas-sbx-b-consumer",
+          "expected_source_secret_reference": "kaas-kafka/kaas-sbx-b-consumer",
+          "source_secret_verified": false,
+          "destination_secret_reference": null,
+          "proposed_password_mount_path": "/credentials/kaas-sbx-b-consumer/password",
+          "delivery_authority_reference": null,
+          "credential_lifecycle_reference": null,
+          "quotas_declared": {
+            "producerByteRate": 65536,
+            "consumerByteRate": 65536,
+            "requestPercentage": 5
+          },
+          "acls_declared": [
+            {
+              "resource": {
+                "type": "topic",
+                "name": "kaas-sbx-b-events",
+                "patternType": "literal"
+              },
+              "operations": [
+                "Read",
+                "Describe"
+              ]
+            },
+            {
+              "resource": {
+                "type": "topic",
+                "name": "kaas-sbx-b-audit",
+                "patternType": "literal"
+              },
+              "operations": [
+                "Read",
+                "Describe"
+              ]
+            },
+            {
+              "resource": {
+                "type": "group",
+                "name": "kaas-sbx-b-events-group",
+                "patternType": "literal"
+              },
+              "operations": [
+                "Read",
+                "Describe"
+              ]
+            },
+            {
+              "resource": {
+                "type": "group",
+                "name": "kaas-sbx-b-audit-group",
+                "patternType": "literal"
+              },
+              "operations": [
+                "Read",
+                "Describe"
+              ]
+            }
+          ]
+        }
+      },
+      "initial_group_offsets_reference": null,
+      "fixture_only_group_ownership_reference": null
+    }
+  ],
+  "negative_cases": [
+    {
+      "id": "kaas-sbx-a-cross-topic-write",
+      "principal": "kaas-sbx-a-producer",
+      "operation": "produce",
+      "topic": "kaas-sbx-b-events",
+      "group": null,
+      "expected_failure_category": "topic_authorization_denied",
+      "classification": "PROPOSED_C3_C6_REVIEW_REQUIRED",
+      "maximum_application_attempts": 1,
+      "maximum_original_value_bytes": 1000,
+      "offset_commit_allowed": false,
+      "application_retry_allowed": false,
+      "runtime_result": "NOT_RUN"
+    },
+    {
+      "id": "kaas-sbx-a-cross-topic-read",
+      "principal": "kaas-sbx-a-consumer",
+      "operation": "consume",
+      "topic": "kaas-sbx-b-events",
+      "group": "kaas-sbx-a-events-group",
+      "expected_failure_category": "topic_authorization_denied",
+      "classification": "PROPOSED_C3_C6_REVIEW_REQUIRED",
+      "maximum_application_attempts": 1,
+      "maximum_original_value_bytes": 0,
+      "offset_commit_allowed": false,
+      "application_retry_allowed": false,
+      "runtime_result": "NOT_RUN"
+    },
+    {
+      "id": "kaas-sbx-a-cross-group-read",
+      "principal": "kaas-sbx-a-consumer",
+      "operation": "consume",
+      "topic": "kaas-sbx-a-events",
+      "group": "kaas-sbx-b-events-group",
+      "expected_failure_category": "group_authorization_denied",
+      "classification": "PROPOSED_C3_C6_REVIEW_REQUIRED",
+      "maximum_application_attempts": 1,
+      "maximum_original_value_bytes": 0,
+      "offset_commit_allowed": false,
+      "application_retry_allowed": false,
+      "runtime_result": "NOT_RUN"
+    },
+    {
+      "id": "kaas-sbx-a-consumer-write",
+      "principal": "kaas-sbx-a-consumer",
+      "operation": "produce",
+      "topic": "kaas-sbx-a-events",
+      "group": null,
+      "expected_failure_category": "topic_authorization_denied",
+      "classification": "PROPOSED_C3_C6_REVIEW_REQUIRED",
+      "maximum_application_attempts": 1,
+      "maximum_original_value_bytes": 1000,
+      "offset_commit_allowed": false,
+      "application_retry_allowed": false,
+      "runtime_result": "NOT_RUN"
+    },
+    {
+      "id": "kaas-sbx-b-cross-topic-write",
+      "principal": "kaas-sbx-b-producer",
+      "operation": "produce",
+      "topic": "kaas-sbx-a-events",
+      "group": null,
+      "expected_failure_category": "topic_authorization_denied",
+      "classification": "PROPOSED_C3_C6_REVIEW_REQUIRED",
+      "maximum_application_attempts": 1,
+      "maximum_original_value_bytes": 1000,
+      "offset_commit_allowed": false,
+      "application_retry_allowed": false,
+      "runtime_result": "NOT_RUN"
+    },
+    {
+      "id": "kaas-sbx-b-cross-topic-read",
+      "principal": "kaas-sbx-b-consumer",
+      "operation": "consume",
+      "topic": "kaas-sbx-a-events",
+      "group": "kaas-sbx-b-events-group",
+      "expected_failure_category": "topic_authorization_denied",
+      "classification": "PROPOSED_C3_C6_REVIEW_REQUIRED",
+      "maximum_application_attempts": 1,
+      "maximum_original_value_bytes": 0,
+      "offset_commit_allowed": false,
+      "application_retry_allowed": false,
+      "runtime_result": "NOT_RUN"
+    },
+    {
+      "id": "kaas-sbx-b-cross-group-read",
+      "principal": "kaas-sbx-b-consumer",
+      "operation": "consume",
+      "topic": "kaas-sbx-b-events",
+      "group": "kaas-sbx-a-events-group",
+      "expected_failure_category": "group_authorization_denied",
+      "classification": "PROPOSED_C3_C6_REVIEW_REQUIRED",
+      "maximum_application_attempts": 1,
+      "maximum_original_value_bytes": 0,
+      "offset_commit_allowed": false,
+      "application_retry_allowed": false,
+      "runtime_result": "NOT_RUN"
+    },
+    {
+      "id": "kaas-sbx-b-consumer-write",
+      "principal": "kaas-sbx-b-consumer",
+      "operation": "produce",
+      "topic": "kaas-sbx-b-events",
+      "group": null,
+      "expected_failure_category": "topic_authorization_denied",
+      "classification": "PROPOSED_C3_C6_REVIEW_REQUIRED",
+      "maximum_application_attempts": 1,
+      "maximum_original_value_bytes": 1000,
+      "offset_commit_allowed": false,
+      "application_retry_allowed": false,
+      "runtime_result": "NOT_RUN"
+    }
+  ],
+  "proposed_budget": {
+    "status": "PROPOSED_NOT_EXECUTED",
+    "positive_records": 16,
+    "positive_original_value_bytes": 16000,
+    "maximum_negative_produce_attempts": 4,
+    "maximum_negative_attempted_value_bytes": 4000,
+    "maximum_total_attempted_logical_value_bytes": 20000,
+    "negative_consume_attempts": 4,
+    "maximum_value_payload_bytes_ceiling": 2097152,
+    "fixture_value_bytes": 1000,
+    "maximum_total_client_job_seconds": 300,
+    "phase_caps_seconds": {
+      "startup_and_controls": 45,
+      "positive_delivery": 90,
+      "negative_cases": 90,
+      "final_reconciliation_drain": 45,
+      "shutdown": 30
+    },
+    "producer_rate_and_catchup_policy": "bounded_fixture_calls; no load target and no final spike",
+    "worker_cpu_memory_allocation_reference": null,
+    "evidence_capacity_custody_reference": null
+  },
+  "group_and_offset_policy": {
+    "literal_group_ids_required": true,
+    "append_run_suffix_to_group": false,
+    "run_identity_location": "record_key_and_evidence",
+    "initial_reset_policy_candidate": "earliest_if_no_committed_offset",
+    "reset_or_delete_existing_offsets": false,
+    "automatic_group_creation_for_denied_cases": false,
+    "reuse_requires_fixture_only_ownership_and_initial_committed_offset_evidence": true,
+    "skip_unprocessed_application_records_and_commit_past_them": false,
+    "negative_case_commit_offsets": false
+  },
+  "evidence_contract": {
+    "unique_record_id_fields": [
+      "run_id",
+      "tenant_id",
+      "topic",
+      "sequence",
+      "case_id"
+    ],
+    "events": [
+      "attempt",
+      "acknowledged",
+      "unresolved",
+      "receipt",
+      "durable_receipt_ack",
+      "commit",
+      "expected_denial",
+      "unexpected_success",
+      "client_terminal"
+    ],
+    "retries_reuse_logical_id": true,
+    "late_acknowledgements_separate": true,
+    "negative_writes_excluded_from_positive_ingestion_target": true,
+    "timeout_only_is_denial_proof": false,
+    "receipt_is_producer_acknowledgement": false,
+    "offset_commit_is_payload_integrity_proof": false,
+    "sink_url": null,
+    "durability_reference": null,
+    "export_seal_custody_reference": null,
+    "redaction_and_no_debug_reference": null
+  },
+  "entry_gates": {
+    "r1_tenant_reconciliation_ownership_ready_reference": null,
+    "current_health_headroom_reference": null,
+    "fixture_state_positive_controls_reference": null,
+    "c3_acceptance_review_reference": null,
+    "c6_identity_network_review_reference": null,
+    "execution_owner_window_stop_reference": null,
+    "literal_group_membership_evidence_reference": null
+  },
+  "excluded_changes": [
+    "Kafka_and_NodePool",
+    "broker_storage_or_operator_watch",
+    "ACL_broadening_for_runner",
+    "network_or_Secret_delivery_apply",
+    "tenant_manual_sync",
+    "registry_or_Keycloak",
+    "recovery_or_fault_injection",
+    "full_day_or_TB_profiles"
+  ],
+  "result": "NOT_RUN"
+}
